@@ -51,6 +51,18 @@ async def cb_data(client, callback_query):
         elif callback_query.data == "referral":
             await handle_referral_command(client, callback_query.message)
         elif callback_query.data == "view_ads":
+            # Create buttons for the response
+            buttons = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔗 Visit Website", callback_data="visit_website", url="https://otieu.com/4/9455388")],
+                [InlineKeyboardButton("✅ I've Visited", callback_data="ads_complete")]
+            ])
+            
+            await callback_query.edit_message_text(
+                f"📺 View ads to earn more BTS!\n\n"
+                f"Visit the website and click 'I've Visited' to continue.",
+                reply_markup=buttons
+            )
+        elif callback_query.data == "visit_website":
             # Add 0.2 BTS to user's balance
             user_id = callback_query.from_user.id
             user = await db.get_user(user_id)
@@ -62,7 +74,6 @@ async def cb_data(client, callback_query):
             
             # Create buttons for the response
             buttons = InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔗 Visit Website", url="https://otieu.com/4/9455388")],
                 [InlineKeyboardButton("✅ I've Visited", callback_data="ads_complete")]
             ])
             
@@ -70,7 +81,7 @@ async def cb_data(client, callback_query):
                 f"📺 View ads to earn more BTS!\n\n"
                 f"💰 You've earned 0.2 BTS!\n"
                 f"💵 New balance: {new_balance} BTS\n\n"
-                f"Visit the website and click 'I've Visited' to continue.",
+                f"Click 'I've Visited' to continue.",
                 reply_markup=buttons
             )
         elif callback_query.data == "ads_complete":
