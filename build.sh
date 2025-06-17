@@ -1,31 +1,21 @@
 #!/bin/bash
-set -e  # Exit immediately if any command fails
+set -e  # Exit on error
 
-# ===== 1. INSTALL SYSTEM DEPENDENCIES =====
-echo "📦 Installing critical system libraries..."
-apt-get update && apt-get install -y \
-    python3.11 \
-    python3.11-dev \
-    python3.11-venv \
-    libjpeg-dev \
-    zlib1g-dev \
-    libfreetype6-dev \
-    libtiff-dev \
-    libqhull-dev
+# ===== 1. USE RENDER'S PYTHON (NO VENV) =====
+echo "🐍 Using Render's Python environment directly"
 
-# ===== 2. CREATE VIRTUAL ENVIRONMENT =====
-echo "🐍 Creating Python 3.11 virtual environment..."
-python3.11 -m venv venv
-source venv/bin/activate
-
-# ===== 3. INSTALL REQUIREMENTS =====
-echo "🚀 Installing Python packages..."
+# ===== 2. INSTALL BINARY WHEELS =====
+echo "📦 Installing Python packages (binary wheels only)..."
 pip install --upgrade pip setuptools wheel
-pip install --no-cache-dir -r requirements.txt
+pip install \
+    --only-binary=:all: \
+    --no-cache-dir \
+    -r requirements.txt
 
-# ===== 4. VERIFY INSTALLATIONS =====
-echo "✅ Verifying installations..."
+# ===== 3. VERIFY INSTALLS =====
+echo "✅ Verifying critical packages..."
 python -c "import PIL; print(f'✔ Pillow {PIL.__version__} working')"
-python -c "import matplotlib; print('✔ Matplotlib imports successfully')"
+python -c "import numpy; print(f'✔ NumPy {numpy.__version__}')"
+python -c "import matplotlib; print('✔ Matplotlib imports OK')"
 
 echo "🎉 Build completed successfully!"

@@ -65,7 +65,9 @@ jupyterlab_pygments==0.3.0
 jupyterlab_server==2.27.2
 kiwisolver==1.4.5
 MarkupSafe==2.1.5
-matplotlib==3.9.0
+pillow==10.3.0 --only-binary=pillow
+numpy==1.24.0 --only-binary=numpy
+matplotlib==3.7.1 --only-binary=matplotlib
 matplotlib-inline==0.1.7
 mistune==3.0.2
 motor==3.4.0
@@ -78,14 +80,12 @@ nbformat==5.10.4
 nest-asyncio==1.6.0
 networkx==3.3
 notebook_shim==0.2.4
-numpy==1.26.4
 overrides==7.7.0
 packaging==24.0
 Cython>=3.0.0
 pandocfilters==1.5.1
 parso==0.8.4
 pexpect==4.9.0
-pillow==10.3.0
 platformdirs==4.2.2
 plotly==5.22.0
 prometheus_client==0.20.0
