@@ -137,4 +137,4 @@ wcwidth==0.2.13
 webcolors==1.13
 webencodings==0.5.1
 websocket-client==1.8.0
-yarl==1.9.4
+yarl==1.17.0
