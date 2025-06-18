@@ -8,6 +8,7 @@ echo "🐍 Using Render's Python environment directly"
 echo "📦 Installing Python packages (binary wheels only)..."
 pip install --upgrade pip setuptools wheel
 pip install \
+    --no-deps \
     --only-binary=:all: \
     --no-cache-dir \
     -r requirements.txt
