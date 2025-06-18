@@ -93,7 +93,7 @@ prompt_toolkit==3.0.45
 psutil==5.9.8
 ptyprocess==0.7.0
 pure-eval==0.2.2
-pycares==4.4.0
+pycares==4.9.0
 pycparser==2.22
 Pygments==2.18.0
 pymongo==4.7.3
