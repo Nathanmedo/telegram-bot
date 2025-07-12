@@ -2,7 +2,7 @@ from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from .database import db
 from .crypto_utils import get_crypto_price
-from .vars import ADMINS
+from .vars import ADMINS, BOT_LINK
 from .client import Bot
 from .admin import add_user
 from datetime import datetime
@@ -11,12 +11,6 @@ from .clear_states import clear_stale_states, withdrawal_state_object
 withdrawal_states = {}
 
 
-# Withdrawal limits and fees (in USD)
-WITHDRAWAL_LIMITS = {
-    "min": 0.000075,  # ~$3 USD equivalent in BTC (at ~$40k/BTC)
-    "max": 0.0025,   # ~$100 USD equivalent in BTC (at ~$40k/BTC)
-    "fee": 1.00      # $1 fee
-}
 
 # Withdrawal buttons
 WITHDRAW_BUTTONS = InlineKeyboardMarkup([
@@ -78,8 +72,11 @@ async def handle_withdraw_command(client: Client, message: Message):
     # Calculate BTC equivalent
     balance_btc = balance / (price_usd * 1000)  # Since 1 USD = 1000 tokens
     
-    # Calculate max BTC amount based on USD limit
-    max_btc = WITHDRAWAL_LIMITS["max"] / price_usd
+    # Calculate min and max BTC amount based on USD limits
+    min_usd = 3.0
+    max_usd = 100.0
+    min_btc = min_usd / price_usd
+    max_btc = max_usd / price_usd
     
     # Store state for withdrawal input
     withdrawal_states[user_id] = {
@@ -94,12 +91,12 @@ async def handle_withdraw_command(client: Client, message: Message):
     
     await message.reply_text(
         f"📤 Withdraw your earnings\n\n"
-        f"💰 Available balance: {balance_btc:.8f} BTC\n\n"
+        f"💰 Available balance: {balance_btc:.8f} BTC  ( {balance} tokens )\n\n"
         f"Withdrawal limits:\n"
-        f"• Minimum: {WITHDRAWAL_LIMITS['min']:.8f} BTC\n"
-        f"• Maximum: {max_btc:.8f} BTC (${WITHDRAWAL_LIMITS['max']})\n"
-        f"• Fee: ${WITHDRAWAL_LIMITS['fee']}\n\n"
-        f"Please enter the amount in BTC you want to withdraw.\n"
+        f"• Minimum: ${min_usd:.2f}  ( {min_btc:.8f} BTC )\n"
+        f"• Maximum: ${max_usd:.2f} ( {max_btc:.8f} BTC )\n"
+        f"• Fee: $1.00 (deducted from withdrawal amount)\n\n"
+        f"Please enter the amount you want to withdraw in USD (between $3 and $100).\n"
         f"Enter /cancel to cancel this operation."
     )
 
@@ -164,27 +161,38 @@ async def handle_withdrawal_input_logic(client: Client, message: Message, text: 
     print(f"[DEBUG] Current withdrawal state: {state}")
     
     try:
-        amount = float(text)
-        if amount <= 0:
-            await message.reply_text("❌ Please enter a positive amount.")
+        amount_usd = float(text)
+        if amount_usd <= 0:
+            await message.reply_text("❌ Please enter a positive amount in USD.")
             return
-            
-        # Get user's balance
+        # Check min/max
+        if amount_usd < 3.0:
+            await message.reply_text("❌ Minimum withdrawal is $3.00.")
+            return
+        if amount_usd > 100.0:
+            await message.reply_text("❌ Maximum withdrawal is $100.00.")
+            return
+        # Apply $1 fee
+        amount_usd_after_fee = amount_usd - 1.0
+        if amount_usd_after_fee <= 0:
+            await message.reply_text("❌ Amount after fee must be positive. Please enter a higher amount.")
+            return
+        # Convert to BTC
+        price_usd = state["price_usd"]
+        amount_btc = amount_usd_after_fee / price_usd
+        # Check if user has enough balance (in tokens)
         user = await db.get_user(user_id)
         balance = user.get("balance", 0) if user else 0
-        
-        if amount > balance:
-            await message.reply_text(f"❌ Insufficient balance. Your balance is {balance} 🏵")
+        if amount_usd > (balance / 1000):
+            await message.reply_text(f"❌ Insufficient balance. Your balance is {balance} tokens (${balance/1000:.2f}).")
             return
-            
-        # Store amount in state
-        state["amount"] = amount
+        state["amount_usd"] = amount_usd
+        state["amount_btc"] = amount_btc
         state["step"] = "confirm"
         print(f"[DEBUG] Updated withdrawal state for user {user_id}: {state}")
-        
-        # Send confirmation
         await message.reply_text(
-            f"💎 Withdraw {amount} 🏵\n\n"
+            f"💎 Withdraw ${amount_usd:.2f} (after $1 fee: ${amount_usd_after_fee:.2f})\n"
+            f"Equivalent to: {amount_btc:.8f} BTC\n"
             f"To: {state['wallet_address']}\n\n"
             "Please confirm your withdrawal:",
             reply_markup=InlineKeyboardMarkup([
@@ -195,7 +203,7 @@ async def handle_withdrawal_input_logic(client: Client, message: Message, text: 
         
     except ValueError:
         print(f"[DEBUG] Invalid number format for user {user_id}: {text}")
-        await message.reply_text("❌ Please enter a valid number.")
+        await message.reply_text("❌ Please enter a valid number in USD.")
     except Exception as e:
         print(f"[DEBUG] Error in withdrawal input: {str(e)}")
         await message.reply_text("❌ An error occurred. Please try again.")
@@ -270,7 +278,7 @@ async def handle_confirm_withdrawal(client: Client, callback_query: CallbackQuer
     
     try:
         # Get withdrawal details
-        amount_btc = state["amount"]
+        amount_btc = state["amount_btc"]
         amount_tokens = amount_btc * state["price_usd"] * 1000  # Convert BTC to tokens
         
         # Get wallet address
@@ -334,7 +342,7 @@ async def handle_confirm_withdrawal(client: Client, callback_query: CallbackQuer
                 f"💸 Amount: {amount_btc:.8f} BTC\n"
                 f"📝 To address: {wallet_address}\n\n"
                 f"Withdrawal is being processed...\n\n"
-                f"🤖 Bot: Handybot Mining (https://t.me/plus_game_bot) ™"
+                f"🤖 Bot: BTS Trading: ({BOT_LINK}) ™"
             )
         except Exception as e:
             print(f"Failed to send channel message: {e}")
@@ -402,7 +410,7 @@ async def handle_approve_withdrawal_callback(client: Client, callback_query: Cal
                     f"💸 Amount: {withdrawal['amount_btc']:.8f} BTC\n"
                     f"📝 To address: {await db.get_wallet_address(user_id)}\n\n"
                     f"Withdrawal has been processed successfully!\n\n"
-                    f"🤖 Bot: Redirect (https://otieu.com/4/9455388)"
+                    f"🤖 Bot: BTS Trading: ({BOT_LINK})"
                 )
             except Exception as e:
                 print(f"Failed to send channel message: {e}")
@@ -432,4 +440,12 @@ async def handle_cancel_withdrawal(client: Client, callback_query: CallbackQuery
     if user_id in withdrawal_states:
         del withdrawal_states[user_id]
     
-    await callback_query.edit_message_text("❌ Withdrawal cancelled.") 
+    await callback_query.edit_message_text("❌ Withdrawal cancelled.")
+
+@Bot.on_message(filters.private & filters.command(["cancel"]))
+async def handle_cancel_withdraw_command(client: Client, message: Message):
+    user_id = message.chat.id
+    if user_id in withdrawal_states:
+        del withdrawal_states[user_id]
+    await message.reply_text("❌ Withdrawal cancelled.")
+    # Optionally, you can show the main menu or other navigation here 

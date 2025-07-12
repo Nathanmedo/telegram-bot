@@ -6,11 +6,17 @@ from .crypto_utils import get_crypto_price
 import asyncio
 from datetime import datetime, timedelta
 import pytz
-from .vars import ADMINS
+from .vars import ADMINS, BOT_LINK, NOWPAYMENTS_API_KEY, BASE_URL
 from .client import Bot
 from .clear_states import deposit_state_object, clear_stale_states
+import string
+import random
+import requests
+
 
 deposit_states={}
+
+NOWPAYMENTS_API_URL= 'https://api.nowpayments.io/v1/payment' 
 
 # Deposit addresses (replace with actual addresses)
 DEPOSIT_ADDRESSES = {
@@ -27,7 +33,7 @@ DEPOSIT_ADDRESSES = {
 # Deposit limits and fees (in USD)
 DEPOSIT_LIMITS = {
     "min": 10,  # $10
-    "max": 10000,  # $100000
+    "max": 1000,  # $100000
     "fee": 1.00  # $1 fee
 }
 
@@ -133,7 +139,7 @@ async def handle_select_currency(client: Client, callback_query: CallbackQuery):
             "• All deposits below or above the set limit will be ignored and not refunded.\n"
             "• All deposits are automatically credited within 1-2 hours of the bot. you will be notified as soon as your BTS are credited.\n"
             "• All your deposits are subject to a fee. Then from each of your deposits the fee is deducted.\n\n"
-            "✔️ Write below the amount in {currency} you want to deposit\n"
+            f"✔️ Write below the amount in {currency} you want to deposit\n"
             "or digit /start to cancel this operation."
         )
     except (ValueError, ZeroDivisionError, IndexError) as e:
@@ -177,33 +183,71 @@ async def handle_deposit_input_logic(client: Client, message: Message, text: str
             )
             return
         
-        # Store amount in state
-        deposit_states[user_id].update({
-            "amount": amount,
-            "amount_usd": amount_usd,
-            "fee_amount": fee_amount,
-            "step": "confirm"
-        })
+        #GENERATE PAYMENT CODE
+        code = ''.join(random.choices(string.ascii_letters + string.digits, k=6))
+        deposit_id = f"deposit_{user_id}_{currency}_{code}"
         
-        # Get deposit address
-        address = DEPOSIT_ADDRESSES.get(currency.lower())
-        if not address:
-            await message.reply_text("Error: Invalid currency selected.")
-            return
-        
-        # Send deposit instructions
-        await message.reply_text(
-            f"💳 You have chosen to deposit {amount} {currency}\n"
-            f"deposit exactly this amount!\n"
-            "Read the report before depositing.\n\n"
-            "• Report:\n"
-            f"💰 You will deposit: {amount} {currency} ( ${amount_usd:.2f} )\n"
-            f"💲 Fee: {fee_amount:.8f} {currency} ~ ${DEPOSIT_LIMITS['fee']}\n\n"
-            f"Deposit to this {currency} Address:\n"
-            f"`{address}`\n\n"
-            "💱 Only after sending {currency} and COMPLETED the transaction click on \"Deposit completed\".",
-            reply_markup=DEPOSIT_CONFIRM_BUTTON
+        try: 
+            payment_data  = {
+                "price_amount": amount,
+                "price_currency": currency.lower(),
+                "pay_currency": currency.lower(),
+                "order_id": deposit_id,
+                "ipn_callback_url": f"{BASE_URL}/nowpayments-callback",
+                "order_description": f"Deposit for user {user_id} in {currency}",
+            }
+
+            # Make the API request
+            headers = {
+                "x-api-key": NOWPAYMENTS_API_KEY,
+                "Content-Type": "application/json"
+            }
+
+            response = requests.post(
+            NOWPAYMENTS_API_URL,
+            headers=headers,
+            json=payment_data
         )
+            if response.status_code == 201:
+                payment_info = response.json()
+
+                # Store amount in state
+                deposit_states[user_id].update({
+                    "amount": amount,
+                    "amount_usd": amount_usd,
+                    "fee_amount": fee_amount,
+                    "step": "confirm",
+                    "deposit_id": deposit_id,
+                    "payment_id": payment_info["payment_id"]
+                })
+                
+                # Get deposit address
+                address = payment_info["pay_address"]
+                if not address:
+                    await message.reply_text("Error: Invalid currency selected.")
+                    return
+                
+                # Send deposit instructions
+                await message.reply_text(
+                    f"💳 You have chosen to deposit {amount} {currency}\n"
+                    f"deposit exactly this amount!\n"
+                    "Read the report before depositing.\n\n"
+                    "• Report:\n"
+                    f"💰 You will deposit: {amount} {currency} ( ${amount_usd:.2f} )\n"
+                    f"💲 Fee: {fee_amount:.8f} {currency} ~ ${DEPOSIT_LIMITS['fee']}\n\n"
+                    f"Deposit to this {currency} Address:\n"
+                    f"`{address}`\n\n"
+                    f"Deposit ID: `{deposit_id}`\n\n"
+                    f"Payment ID: {payment_info['payment_id']}"
+                    f"💱 Only after sending {currency} and COMPLETED the transaction click on \"Deposit completed\".",
+                    reply_markup=DEPOSIT_CONFIRM_BUTTON
+                )
+            else:
+                await message.reply(f"Payment failed: {response.text}")
+
+        except Exception as e:
+            await message.reply(f"Error: {str(e)}")
+            
         
         # Delete the amount input message
         await message.delete()
@@ -242,6 +286,8 @@ async def handle_complete_deposit(client: Client, callback_query: CallbackQuery)
     currency = deposit_info["currency"]
     amount = deposit_info["amount"]
     amount_usd = deposit_info["amount_usd"]
+    payment_id = deposit_info["payment_id"]
+    deposit_id = deposit_info["deposit_id"]
     
     try:
         # Store as pending deposit
@@ -278,6 +324,8 @@ async def handle_complete_deposit(client: Client, callback_query: CallbackQuery)
                     admin_id,
                     f"🛎️ New Deposit Request\n\n"
                     f"User: @{callback_query.from_user.username or callback_query.from_user.first_name}\n"
+                    f"Deposit ID: {deposit_id}\n"
+                    f"payment ID: {payment_id}\n"
                     f"Amount: {amount} {currency} (${amount_usd:.2f})\n\n"
                     f"Click the button below to approve:",
                     reply_markup=approve_button
@@ -359,7 +407,7 @@ async def handle_approve_deposit_callback(client: Client, callback_query: Callba
                     f"🔸ID: {user_id}\n"
                     f"💸 Amount: {deposit['amount']} {deposit['currency']} (${deposit['amount_usd']:.2f})\n\n"
                     f"Deposit has been approved! ❤️\n\n"
-                    f"🤖 Bot: Redirect (https://otieu.com/4/9455388)"
+                    f"🤖 Bot: BTS Trading ({BOT_LINK})"
                 )
                 
                 # Send to channel

@@ -1,7 +1,7 @@
 from pyrogram import Client, filters
 from pyrogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from .database import db
-from .vars import ADMINS
+from .vars import ADMINS, BOT_LINK
 from .client import Bot
 from .admin import add_user
 from .constants import ROBOT_PRICES, ROBOT_RATES
@@ -35,7 +35,8 @@ async def handle_upgrade_command(client: Client, message: Message):
     # Get current robot level and counts
     current_level = await db.get_robot_level(user_id)
     robot_counts = await db.get_robot_counts(user_id)
-    print(f"[DEBUG] Current level: {current_level}, Robot counts: {robot_counts}")
+    total_mining_rate = await db.calculate_mining_rate(user_id)
+    print(f"[DEBUG] Current level: {current_level}, Robot counts: {robot_counts}, Total mining rate: {total_mining_rate}")
     
     # Store state for upgrade input with select_robot step
     upgrade_states[user_id] = {
@@ -50,6 +51,7 @@ async def handle_upgrade_command(client: Client, message: Message):
     
     # Build upgrade options message
     message_text = f"🤖 Current Robot Level: {current_level}\n"
+    message_text += f"💰 Total Mining Rate: {total_mining_rate} BTS/hour\n\n"
     message_text += "Your Robots:\n"
     for level, count in robot_counts.items():
         if count > 0:
@@ -57,7 +59,7 @@ async def handle_upgrade_command(client: Client, message: Message):
     
     message_text += "\nAvailable Upgrades:\n"
     for level, price in ROBOT_PRICES.items():
-        if level > current_level:
+        if level >= current_level:  # Allow buying same level or higher
             message_text += f"• Robot {level}: ${price} ({ROBOT_RATES[level]} BTS/hour)\n"
     
     message_text += "\n1000 BTS = $1\n"
@@ -111,10 +113,11 @@ async def handle_upgrade_input_logic(client: Client, message: Message, text:str)
         current_level = state["current_level"]
         print(f"[DEBUG] Current robot level: {current_level}")
         
-        if target_level <= current_level:
-            print(f"[DEBUG] Target level {target_level} not higher than current level {current_level}")
+        # Allow buying same level or higher (no downgrading)
+        if target_level < current_level:
+            print(f"[DEBUG] Target level {target_level} is lower than current level {current_level}")
             await message.reply_text(
-                f"❌ You can only upgrade to a higher level robot. Your current level is {current_level}."
+                f"❌ You cannot downgrade to a lower level robot. Your current level is {current_level}."
             )
             return
         
@@ -122,10 +125,22 @@ async def handle_upgrade_input_logic(client: Client, message: Message, text:str)
         upgrade_cost = ROBOT_PRICES[target_level]
         print(f"[DEBUG] Upgrade cost: ${upgrade_cost}")
         
+        # Calculate new mining rate after upgrade
+        current_robot_counts = state["robot_counts"].copy()
+        if str(target_level) not in current_robot_counts:
+            current_robot_counts[str(target_level)] = 0
+        current_robot_counts[str(target_level)] += 1
+        
+        new_total_rate = 0
+        for level, count in current_robot_counts.items():
+            if count > 0:
+                new_total_rate += ROBOT_RATES[int(level)] * count
+        
         # Store upgrade details
         upgrade_states[user_id].update({
             "target_level": target_level,
             "cost": upgrade_cost,
+            "new_total_rate": new_total_rate,
             "step": "confirm"
         })
         print(f"[DEBUG] Updated upgrade state: {upgrade_states[user_id]}")
@@ -136,7 +151,8 @@ async def handle_upgrade_input_logic(client: Client, message: Message, text:str)
             f"Current Level: {current_level}\n"
             f"Target Level: {target_level}\n"
             f"Cost: ${upgrade_cost}\n"
-            f"New Mining Rate: {ROBOT_RATES[target_level]} BTS/hour\n\n"
+            f"New Robot Mining Rate: {ROBOT_RATES[target_level]} BTS/hour\n"
+            f"New Total Mining Rate: {new_total_rate} BTS/hour\n\n"
             f"Click the button below to proceed with payment:",
             reply_markup=CONFIRM_UPGRADE_BUTTON
         )
@@ -158,24 +174,36 @@ async def handle_upgrade_input_logic(client: Client, message: Message, text:str)
 async def handle_confirm_upgrade(client: Client, callback_query: CallbackQuery):
     """Handle upgrade confirmation"""
     user_id = callback_query.from_user.id
-    
     if user_id not in upgrade_states or upgrade_states[user_id]["step"] != "confirm":
         await callback_query.answer("Invalid upgrade state", show_alert=True)
         return
-    
     try:
         # Get upgrade details
         state = upgrade_states[user_id]
         target_level = state["target_level"]
         cost = state["cost"]
         current_level = await db.get_robot_level(user_id)
-        
+        # Check deposited balance
+        user = await db.get_user(user_id)
+        deposited_balance = user.get("deposited_balance", 0)
+        if deposited_balance < cost:
+            await callback_query.answer(
+                f"❌ Not enough deposited funds to upgrade. You need ${cost}, but you have only ${deposited_balance:.2f} deposited. Please deposit more to upgrade.",
+                show_alert=True
+            )
+            return
+        # Deduct the upgrade cost from deposited_balance
+        new_deposited_balance = deposited_balance - cost
+        await db.col.update_one(
+            {"id": int(user_id)},
+            {"$set": {"deposited_balance": new_deposited_balance}}
+        )
+        if user_id in db.cache:
+            del db.cache[user_id]
         # Store as pending upgrade
         await db.add_pending_upgrade(user_id, current_level, target_level, cost)
-        
         # Clear upgrade state
         del upgrade_states[user_id]
-        
         # Create approve button for admin
         approve_button = InlineKeyboardMarkup([
             [InlineKeyboardButton(
@@ -183,16 +211,15 @@ async def handle_confirm_upgrade(client: Client, callback_query: CallbackQuery):
                 callback_data=f"approve_upgrade_{user_id}_{target_level}"
             )]
         ])
-        
         # Notify user
         await callback_query.edit_message_text(
             f"✅ Upgrade request submitted!\n\n"
             f"Current Level: {current_level}\n"
             f"Target Level: {target_level}\n"
-            f"Cost: ${cost}\n\n"
+            f"Cost: ${cost}\n"
+            f"New Total Mining Rate: {state.get('new_total_rate', 'N/A')} BTS/hour\n\n"
             f"Your upgrade is being processed. You will be notified once it's approved."
         )
-        
         # Notify admins
         for admin_id in ADMINS:
             try:
@@ -208,14 +235,12 @@ async def handle_confirm_upgrade(client: Client, callback_query: CallbackQuery):
                 )
             except Exception as e:
                 print(f"Failed to notify admin {admin_id}: {e}")
-        
         # Send message to channel
         try:
             # Get user details for the channel message
             user_info = await client.get_users(user_id)
             username = user_info.username or "No username"
             first_name = user_info.first_name or "No name"
-            
             await client.send_message(
                 "BTS_bot_payment",
                 f"📈 New Upgrade Request\n\n"
@@ -226,11 +251,10 @@ async def handle_confirm_upgrade(client: Client, callback_query: CallbackQuery):
                 f"🤖 Current Level: {current_level}\n"
                 f"🤖 Target Level: {target_level}\n\n"
                 f"Upgrade is being processed...\n\n"
-                f"🤖 Bot: Handybot Mining (https://t.me/plus_game_bot) ™"
+                f"🤖 Bot: BTS Trading ({BOT_LINK}) ™"
             )
         except Exception as e:
             print(f"Failed to send channel message: {e}")
-            
     except Exception as e:
         print(f"Error in confirm_upgrade: {e}")
         await callback_query.answer("An error occurred. Please try again.", show_alert=True)
@@ -265,13 +289,16 @@ async def handle_approve_upgrade_callback(client: Client, callback_query: Callba
         
         # Notify user
         try:
+            # Calculate new total mining rate
+            new_total_rate = await db.calculate_mining_rate(user_id)
+            
             await client.send_message(
                 user_id,
                 f"✅ Your upgrade has been approved!\n\n"
                 f"🤖 New Robot Level: {target_level}\n"
-                f"💰 New Mining Rate: {ROBOT_RATES[target_level]} BTS/hour\n\n"
+                f"💰 New Total Mining Rate: {new_total_rate} BTS/hour\n\n"
                 f"Your robots:\n" + 
-                "\n".join([f"• Robot {level}: {count}x" for level, count in robot_counts.items() if count > 0])
+                "\n".join([f"• Robot {level}: {count}x ({ROBOT_RATES[int(level)]} BTS/hour each)" for level, count in robot_counts.items() if count > 0])
             )
             
             # Send message to channel
@@ -290,7 +317,7 @@ async def handle_approve_upgrade_callback(client: Client, callback_query: Callba
                     f"🤖 New Robot Level: {target_level}\n"
                     f"💰 New Mining Rate: {ROBOT_RATES[target_level]} BTS/hour\n\n"
                     f"Upgrade has been processed successfully!\n\n"
-                    f"🤖 Bot: Handybot Mining (https://t.me/plus_game_bot) ™"
+                    f"🤖 Bot: BTS Trading ({BOT_LINK}) ™"
                 )
             except Exception as e:
                 print(f"Failed to send channel message: {e}")

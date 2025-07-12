@@ -4,15 +4,18 @@ from .database import db
 from .client import Bot
 from .admin import add_user
 from .commands import MAIN_BUTTONS
+from .vars import BOT_LINK
+
 
 REFERRAL_BUTTONS = InlineKeyboardMarkup([
-    [InlineKeyboardButton("📤 Share Bot", url="https://t.me/BamCryptoTradingBot")],
+    [InlineKeyboardButton("📤 Share Bot", url=BOT_LINK)],
     [InlineKeyboardButton("❌ Close", callback_data="close")]
 ])
 
-async def handle_referral_command(client: Client, message: Message):
+async def handle_referral_command(client: Client, message: Message, cb=False):
     """Handle /referral command"""
-    print(message)
+    if cb:
+        message = message.message
     user_id = message.chat.id
     await add_user(user_id)
     
@@ -22,31 +25,30 @@ async def handle_referral_command(client: Client, message: Message):
         await message.reply_text("❌ Error getting referral stats. Please try again.")
         return
     
+    referral_link = f"{BOT_LINK}?start={stats['referral_code']}"
     # Build referral message
     message_text = (
         "🤝 **Referral Program**\n\n"
-        f"Your Referral Code: `{stats['referral_code']}`\n\n"
+        f"Your Referral Link: [COPY] {referral_link}\n\n"
         f"Total Referrals: {stats['referral_count']}\n"
         f"Total Earnings: {stats['referral_earnings']} BTS\n\n"
         "**How it works:**\n"
         "1. Share your referral link with friends\n"
-        "2. When they join using your link, you get 50 BTS\n"
+        "2. When they join using your link, you get 10% of your referrer current mining rate\n"
         "3. The more friends you invite, the more you earn!\n\n"
         "Share your referral link:"
     )
     
     # Create referral link
-    referral_link = f"https://t.me/BamCryptoTradingBot?start={stats['referral_code']}"
     
     # Create buttons
     buttons = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📤 Share Referral Link", url=referral_link)],
         [InlineKeyboardButton("❌ Close", callback_data="close")],
         [InlineKeyboardButton("🏠 Main Menu", callback_data="start")]
     ])
     
-    if isinstance(message, CallbackQuery):
-        await message.edit_message_text(message_text, reply_markup=buttons)
+    if cb:
+        await message.reply_text(message_text, reply_markup=buttons)
     else:
         await message.reply_text(message_text, reply_markup=buttons)
 

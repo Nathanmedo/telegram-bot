@@ -11,6 +11,7 @@ class Database:
         self.pending_deposits = self.db.pending_deposits
         self.pending_withdrawals = self.db.pending_withdrawals
         self.pending_upgrades = self.db.pending_upgrades
+        self.stats = self.db.global_stats  # New collection for global stats
         self.cache = {}
         print(f"Database initialized with URI: {uri} and name: {database_name}")
     
@@ -38,7 +39,15 @@ class Database:
             "referral_code": str(id),  # Use user ID as referral code
             "referred_by": None,  # ID of user who referred this user
             "referral_count": 0,  # Number of successful referrals
-            "referral_earnings": 0  # Total earnings from referrals
+            "referral_earnings": 0,  # Total earnings from referrals
+            "link_clicks": {
+                "link_1": False,
+                "link_2": False,
+                "link_3": False
+            },
+            "ads_completed_count": 0,  # Track number of successful ad completions
+            "pending_referral_code": None,  # Store referral code until verified
+            "withdrawn": 0.0  # Total withdrawn in USD
         }
     
     async def add_user(self, id):
@@ -152,6 +161,10 @@ class Database:
             if user_id in self.cache:
                 del self.cache[user_id]
             
+            # Update global stats
+            await self.increment_total_deposited(deposit["amount_usd"])
+            await self.increment_total_bts(deposit["amount"] * 1000)  # Assuming 1 USD = 1000 BTS
+            
             print("Deposit approval completed successfully")
             return deposit
             
@@ -259,6 +272,19 @@ class Database:
             
             await self.update_balance(user_id, new_balance)
             
+            # Update user's total withdrawn
+            withdrawn_usd = withdrawal["amount_tokens"] / 1000
+            current_withdrawn = user.get("withdrawn", 0.0)
+            new_withdrawn = current_withdrawn + withdrawn_usd
+            await self.col.update_one(
+                {"id": int(user_id)},
+                {"$set": {"withdrawn": new_withdrawn}}
+            )
+            if user_id in self.cache:
+                del self.cache[user_id]
+            # Update global stats
+            await self.increment_total_withdrawn(withdrawn_usd)  # Convert tokens to USD
+            
             return withdrawal
             
         except Exception as e:
@@ -326,16 +352,11 @@ class Database:
             if not user:
                 return None
 
-            # Update robot counts
+            # Update robot counts - add 1 to target level, keep existing robots
             robot_counts = user.get("robot_counts", {"0": 1})
-            current_level = str(upgrade["current_level"])
             target_level = str(upgrade["target_level"])
 
-            # Decrease count of current level robot
-            if current_level in robot_counts and robot_counts[current_level] > 0:
-                robot_counts[current_level] -= 1
-
-            # Increase count of target level robot
+            # Add 1 to target level robot count
             if target_level not in robot_counts:
                 robot_counts[target_level] = 0
             robot_counts[target_level] += 1
@@ -405,10 +426,18 @@ class Database:
                 {"$set": {"referred_by": int(referrer_id)}}
             )
             
+            # Calculate referrer's mining rate and reward
+            mining_rate = await self.calculate_mining_rate(referrer_id)
+            print(f"Referrer {referrer_id} mining rate: {mining_rate}")
+            
+            # Calculate reward: 10% of mining rate, minimum 50 BTS
+            referral_reward = max(0, 50)
+            print(f"Referral reward: {referral_reward} BTS")
+            
             # Update referrer's stats and add reward
             new_count = referrer.get("referral_count", 0) + 1
-            new_earnings = referrer.get("referral_earnings", 0) + 50  # 50 BTS reward
-            new_balance = referrer.get("balance", 0) + 50  # Add 50 BTS to balance
+            new_earnings = referrer.get("referral_earnings", 0) + referral_reward
+            new_balance = referrer.get("balance", 0) + referral_reward
             
             # Update referrer's data
             update_result = await self.col.update_one(
@@ -423,6 +452,7 @@ class Database:
             )
             
             print(f"Updated referrer data: {update_result.modified_count} documents modified")
+            print(f"Referrer {referrer_id} earned {referral_reward} BTS from referral")
             
             # Clear cache for both users
             if user_id in self.cache:
@@ -437,5 +467,82 @@ class Database:
             import traceback
             print(f"Traceback: {traceback.format_exc()}")
             return False
+
+    async def get_link_clicks(self, user_id):
+        """Get the link_clicks status for a user, defaulting to all False if missing."""
+        user = await self.get_user(user_id)
+        default_clicks = {"link_1": False, "link_2": False, "link_3": False}
+        if not user:
+            return default_clicks
+        return user.get("link_clicks", default_clicks)
+
+    async def set_link_clicked(self, user_id, link_number):
+        """Set the specified link (1, 2, or 3) as clicked (True) for the user."""
+        link_key = f"link_{link_number}"
+        print(link_key)
+        # Get current clicks, fallback to all False
+        user = await self.get_user(user_id)
+        if not user:
+            return False
+        link_clicks = user.get("link_clicks", {"link_1": False, "link_2": False, "link_3": False})
+        if link_key not in link_clicks:
+            link_clicks[link_key] = False
+        link_clicks[link_key] = True
+        await self.col.update_one(
+            {"id": int(user_id)},
+            {"$set": {f"link_clicks.{link_key}": link_clicks}}
+        )
+        # Clear cache for this user
+        if user_id in self.cache:
+            del self.cache[user_id]
+        return True
+
+    async def increment_ads_completed_count(self, user_id):
+        """Increment the ads_completed_count for a user"""
+        await self.col.update_one(
+            {"id": int(user_id)},
+            {"$inc": {"ads_completed_count": 1}}
+        )
+        # Clear cache for this user
+        if user_id in self.cache:
+            del self.cache[user_id]
+        # Update global stats
+        await self.increment_total_ads_clicked(1)
+
+    async def get_ads_completed_count(self, user_id):
+        """Get the ads_completed_count for a user"""
+        user = await self.get_user(user_id)
+        return user.get("ads_completed_count", 0) if user else 0
+
+    async def init_global_stats(self):
+        """Ensure the global stats document exists."""
+        stats = await self.stats.find_one({"_id": "global"})
+        if not stats:
+            await self.stats.insert_one({
+                "_id": "global",
+                "total_bts": 0,
+                "total_deposited": 0.0,
+                "total_withdrawn": 0.0,
+                "total_ads_clicked": 0
+            })
+
+    async def increment_total_bts(self, amount):
+        await self.stats.update_one({"_id": "global"}, {"$inc": {"total_bts": amount}})
+
+    async def increment_total_deposited(self, amount):
+        await self.stats.update_one({"_id": "global"}, {"$inc": {"total_deposited": amount}})
+
+    async def increment_total_withdrawn(self, amount):
+        await self.stats.update_one({"_id": "global"}, {"$inc": {"total_withdrawn": amount}})
+
+    async def increment_total_ads_clicked(self, count=1):
+        await self.stats.update_one({"_id": "global"}, {"$inc": {"total_ads_clicked": count}})
+
+    async def get_global_stats(self):
+        stats = await self.stats.find_one({"_id": "global"})
+        if not stats:
+            await self.init_global_stats()
+            stats = await self.stats.find_one({"_id": "global"})
+        return stats
 
 db = Database()
