@@ -94,3 +94,12 @@ DEPOSIT_BUTTONS = InlineKeyboardMarkup([
 DEPOSIT_CONFIRM_BUTTON = InlineKeyboardMarkup([
     [InlineKeyboardButton("✅ Deposit Completed", callback_data="deposit_complete")]
 ])
+
+def generate_freelance_robot_buttons():
+    from .constants import FREELANCE_AD_REQUIREMENTS, ROBOT_RATES
+    buttons = []
+    for level in range(1, 8):
+        label = f"Robot {level} ({FREELANCE_AD_REQUIREMENTS[level]} ads, {ROBOT_RATES[level]} BTS/hr)"
+        buttons.append([InlineKeyboardButton(label, callback_data=f"freelance_robot_{level}")])
+    buttons.append([InlineKeyboardButton("❌ Cancel", callback_data="close")])
+    return InlineKeyboardMarkup(buttons)

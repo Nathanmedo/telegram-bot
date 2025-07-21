@@ -67,3 +67,17 @@ ROBOT_RATES = {
     6: 250,  # 25000 BTS per hour
     7: 500   # 50000 BTS per hour
 }
+
+# Freelance ad requirements per robot (robot level: ads required)
+FREELANCE_AD_REQUIREMENTS = {
+    1: 15,
+    2: 30,
+    3: 60,
+    4: 120,
+    5: 250,
+    6: 500,
+    7: 1000
+}
+
+# Freelance reward percentage (e.g., 0.7 for 70%)
+FREELANCE_REWARD_PERCENTAGE = 0.7

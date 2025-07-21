@@ -138,6 +138,61 @@ async def cb_data(client, callback_query):
             await handle_approve_withdrawal_callback(client, callback_query)
         elif callback_query.data == "withdraw_cancel":
             await handle_cancel_withdrawal(client, callback_query)
+        elif callback_query.data == "freelance":
+            from .buttons import generate_freelance_robot_buttons
+            info = (
+                "🧑‍💻 *Freelance Hourly Claim*\n\n"
+                "View ads and claim hourly BTS rewards!\n\n"
+                "- Each robot requires a certain number of ads viewed to claim.\n"
+                "- You can only claim once per hour.\n"
+                "- You receive 70% of the robot's hourly reward; 30% is used for bot maintenance.\n\n"
+                "Select your robot below to claim if eligible."
+            )
+            await callback_query.edit_message_text(
+                info,
+                reply_markup=generate_freelance_robot_buttons(),
+                disable_web_page_preview=True
+            )
+        elif callback_query.data.startswith("freelance_robot_"):
+            import datetime
+            from .constants import FREELANCE_AD_REQUIREMENTS, ROBOT_RATES, FREELANCE_REWARD_PERCENTAGE
+            level = int(callback_query.data.split("_")[-1])
+            user_id = callback_query.from_user.id
+            user = await db.get_user(user_id)
+            freelance_count = user.get("freelance_count", 0)
+            last_claimed = user.get("last_freelance_claimed")
+            now = datetime.datetime.now()
+            # Check ad requirement
+            ads_required = FREELANCE_AD_REQUIREMENTS[level]
+            if freelance_count < ads_required:
+                ads_left = ads_required - freelance_count
+                await callback_query.answer(
+                    f"You need to view {ads_left} more ads to claim this reward.", show_alert=True
+                )
+                return
+            # Check time requirement
+            if last_claimed:
+                last_claimed_dt = datetime.datetime.fromisoformat(last_claimed)
+                if (now - last_claimed_dt).total_seconds() < 3600:
+                    mins_left = int((3600 - (now - last_claimed_dt).total_seconds()) // 60)
+                    await callback_query.answer(
+                        f"You can claim again in {mins_left} minutes.", show_alert=True
+                    )
+                    return
+            # Eligible: calculate reward
+            reward_full = ROBOT_RATES[level]
+            reward = reward_full * FREELANCE_REWARD_PERCENTAGE
+            new_balance = user.get("balance", 0) + reward
+            await db.update_balance(user_id, new_balance)
+            await db.reset_freelance_count(user_id)
+            await db.update_last_freelance_claimed(user_id, now.isoformat())
+            await callback_query.edit_message_text(
+                f"✅ You claimed {reward:.2f} BTS! (70% of {reward_full} BTS)\n"
+                f"30% ({reward_full - reward:.2f} BTS) is used for bot maintenance.\n\n"
+                f"You can claim again in 1 hour after viewing enough ads.",
+                reply_markup=MAIN_BUTTONS
+            )
+            return
         elif callback_query.data == "close":
             await callback_query.message.delete()
     except Exception as e:

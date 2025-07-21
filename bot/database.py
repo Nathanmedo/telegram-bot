@@ -46,8 +46,14 @@ class Database:
                 "link_3": False
             },
             "ads_completed_count": 0,  # Track number of successful ad completions
+            "ads_views_since_withdraw": 0,  # Track ads watched since last withdrawal
             "pending_referral_code": None,  # Store referral code until verified
-            "withdrawn": 0.0  # Total withdrawn in USD
+            "withdrawn": 0.0,
+            "last_withdrawal_date": None,  # Track last withdrawal date
+            "last_bts_withdrawal": 0.0,    # Track last BTS withdrawal amount
+            # Freelance fields
+            "freelance_count": 0,  # Number of ads viewed since last freelance claim
+            "last_freelance_claimed": None  # Timestamp of last freelance claim
         }
     
     async def add_user(self, id):
@@ -269,24 +275,30 @@ class Database:
             # Update user balance
             current_balance = user.get("balance", 0)
             new_balance = current_balance - withdrawal["amount_tokens"]
-            
             await self.update_balance(user_id, new_balance)
-            
+
             # Update user's total withdrawn
             withdrawn_usd = withdrawal["amount_tokens"] / 1000
             current_withdrawn = user.get("withdrawn", 0.0)
             new_withdrawn = current_withdrawn + withdrawn_usd
+
+            # Set last_withdrawal_date and last_bts_withdrawal, and reset ads_views_since_withdraw
+            now_iso = datetime.datetime.now().isoformat()
             await self.col.update_one(
                 {"id": int(user_id)},
-                {"$set": {"withdrawn": new_withdrawn}}
+                {"$set": {
+                    "withdrawn": new_withdrawn,
+                    "last_withdrawal_date": now_iso,
+                    "last_bts_withdrawal": withdrawal["amount_btc"],
+                    "ads_views_since_withdraw": 0
+                }}
             )
             if user_id in self.cache:
                 del self.cache[user_id]
             # Update global stats
             await self.increment_total_withdrawn(withdrawn_usd)  # Convert tokens to USD
-            
+
             return withdrawal
-            
         except Exception as e:
             print(f"Error in approve_withdrawal: {str(e)}")
             import traceback
@@ -498,10 +510,10 @@ class Database:
         return True
 
     async def increment_ads_completed_count(self, user_id):
-        """Increment the ads_completed_count for a user"""
+        """Increment the ads_completed_count for a user and ads_views_since_withdraw"""
         await self.col.update_one(
             {"id": int(user_id)},
-            {"$inc": {"ads_completed_count": 1}}
+            {"$inc": {"ads_completed_count": 1, "ads_views_since_withdraw": 1}}
         )
         # Clear cache for this user
         if user_id in self.cache:
@@ -544,5 +556,38 @@ class Database:
             await self.init_global_stats()
             stats = await self.stats.find_one({"_id": "global"})
         return stats
+
+    # --- Freelance methods ---
+    async def get_freelance_count(self, user_id):
+        user = await self.get_user(user_id)
+        return user.get("freelance_count", 0) if user else 0
+
+    async def increment_freelance_count(self, user_id, amount=1):
+        await self.col.update_one(
+            {"id": int(user_id)},
+            {"$inc": {"freelance_count": amount}}
+        )
+        if user_id in self.cache:
+            del self.cache[user_id]
+
+    async def reset_freelance_count(self, user_id):
+        await self.col.update_one(
+            {"id": int(user_id)},
+            {"$set": {"freelance_count": 0}}
+        )
+        if user_id in self.cache:
+            del self.cache[user_id]
+
+    async def get_last_freelance_claimed(self, user_id):
+        user = await self.get_user(user_id)
+        return user.get("last_freelance_claimed") if user else None
+
+    async def update_last_freelance_claimed(self, user_id, timestamp):
+        await self.col.update_one(
+            {"id": int(user_id)},
+            {"$set": {"last_freelance_claimed": timestamp}}
+        )
+        if user_id in self.cache:
+            del self.cache[user_id]
 
 db = Database()

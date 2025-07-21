@@ -38,6 +38,9 @@ async def handle_withdraw_command(client: Client, message: Message):
     withdrawal_state_object["user_id"] = user_id
     withdrawal_state_object['state'] = 'withdrawal_input'
 
+    if user_id in db.cache:
+        del db.cache[user_id]
+    
     # Get user's wallet address
     user = await db.get_user(user_id)
     wallet_address = user.get("wallet_address")
@@ -312,6 +315,15 @@ async def handle_confirm_withdrawal(client: Client, callback_query: CallbackQuer
         )
         
         # Notify admins
+        user = await db.get_user(user_id)  # Fetch latest user info for extra fields
+        robot_counts = user.get("robot_counts", {})
+        robot_counts_str = "\n".join([
+            f"• Robot {level}: {count}x" for level, count in robot_counts.items() if count > 0
+        ]) or "No robots"
+        ads_completed_count = user.get("ads_completed_count", 0)
+        ads_completed_after_withdrawal = user.get("ads_views_since_withdraw", 0)
+        last_bts_withdrawal = user.get("last_bts_withdrawal", 0.0)
+        last_withdrawal_date = user.get("last_withdrawal_date", "N/A")
         for admin_id in ADMINS:
             try:
                 await client.send_message(
@@ -320,6 +332,11 @@ async def handle_confirm_withdrawal(client: Client, callback_query: CallbackQuer
                     f"User: @{callback_query.from_user.username or callback_query.from_user.first_name}\n"
                     f"Amount: {amount_btc:.8f} BTC\n"
                     f"To address: {wallet_address}\n\n"
+                    f"Current Robot(s):\n{robot_counts_str}\n"
+                    f"Ads Completed Since Last Withdrawal: {ads_completed_after_withdrawal}\n"
+                    f"Total Ads Views: {ads_completed_count}\n"
+                    f"Last BTS Withdrawal: {last_bts_withdrawal:.8f} BTC\n"
+                    f"Last Withdrawal Date: {last_withdrawal_date}\n\n"
                     f"Click the button below to approve:",
                     reply_markup=approve_button
                 )

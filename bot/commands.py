@@ -18,7 +18,7 @@ from .crypto_utils import (
 from .database import db
 from pyrogram import Client, filters
 from pyrogram.enums import ChatMemberStatus
-from pyrogram.types import Message, BotCommand, BotCommandScopeAllPrivateChats, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import Message, BotCommand, BotCommandScopeAllPrivateChats, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 import asyncio
 from datetime import datetime, timedelta
 import pytz
@@ -37,7 +37,8 @@ MAIN_BUTTONS = InlineKeyboardMarkup([
     [InlineKeyboardButton("📊 Statistics", callback_data="statistics")],
     [InlineKeyboardButton("🤖 Upgrade", callback_data="upgrade")],
     [InlineKeyboardButton("🤝 Referral", callback_data="referral")],
-    [InlineKeyboardButton("📺 View Ads", callback_data="view_ads")]
+    [InlineKeyboardButton("📺 View Ads", callback_data="view_ads")],
+    [InlineKeyboardButton("🧑‍💻 Freelance", callback_data="freelance")]
 ])
 
 # Verification buttons
@@ -46,6 +47,23 @@ VERIFY_BUTTONS = InlineKeyboardMarkup([
     [InlineKeyboardButton("📢 Join Channel 2", url=f"https://t.me/bamcryptoalphaGem")],
     [InlineKeyboardButton("✅ Verify", callback_data="verify_channel")]
 ])
+
+# MENU_KEYBOARD = ReplyKeyboardMarkup(
+#     [
+#         [KeyboardButton("⛏️ Trade")],
+#         [KeyboardButton("💳 Deposit"), KeyboardButton("📤 Withdraw")],
+#         [KeyboardButton("🤖 Upgrade"), KeyboardButton("🤝 Referral")],
+#         [KeyboardButton("📺 View Ads"), KeyboardButton("📊 Statistics")],
+#     ],
+#     resize_keyboard=True
+# )
+
+# @Bot.on_message(filters.private & filters.command(["menu"]))
+# async def menu_command(bot, message):
+#     await message.reply_text(
+#         "\U0001F4CA Command Menu\n\nSelect an option below:",
+#         reply_markup=MENU_KEYBOARD
+#     )
 
 async def check_channel_membership(user_id: int) -> bool:
     try:
@@ -415,6 +433,8 @@ async def balance_callback(bot, callback_query: CallbackQuery):
     print(callback_query)
     user_id = callback_query.message.chat.id
     await add_user(user_id)
+    if user_id in db.cache:
+        del db.cache[user_id]  # Clear cache to ensure fresh balance
     user = await db.get_user(user_id)
     mined_balance = user.get('balance', 0)
     deposited_balance = user.get('deposited_balance', 0)
